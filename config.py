@@ -533,7 +533,7 @@ ONE_OFF_REVENUE_STABLE = 0.15     # ... while revenue moves less than 15% -> dat
 ONE_OFF_TEXT = "Possible one-off or mislabelled item - verify against the annual report."
 
 # AI memo tab (research prototype). False hides the tab; the code, tests and logs stay.
-ENABLE_AI_MEMO = False
+ENABLE_AI_MEMO = True
 AI_MEMO_BANNER = ("Research prototype - in a bank this would run only through an approved model under a data "
                   "agreement; do not paste client data into public AI tools.")
 SIGN_WORDS = ["negative", "outflow", "outflows", "loss", "losses", "deficit", "decline", "declined", "minus",
