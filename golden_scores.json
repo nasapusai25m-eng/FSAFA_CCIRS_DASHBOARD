@@ -1,0 +1,62 @@
+{
+  "Maruti-like (synthetic)": {
+    "year": "FY25",
+    "ccirs": 87.5,
+    "band": "Green",
+    "verdict": "Approve",
+    "pillars": {
+      "A": 85.0,
+      "B": 100.0,
+      "C": 100.0,
+      "D": 60.0
+    }
+  },
+  "Vodafone-Idea-like (synthetic)": {
+    "year": "FY25",
+    "ccirs": 63.0,
+    "band": "Amber",
+    "verdict": "Approve with conditions",
+    "pillars": {
+      "A": 100.0,
+      "B": 0.0,
+      "C": 100.0,
+      "D": 40.0
+    }
+  },
+  "Airtel-like (synthetic)": {
+    "year": "FY25",
+    "ccirs": 79.5,
+    "band": "Green",
+    "verdict": "Approve",
+    "pillars": {
+      "A": 100.0,
+      "B": 50.0,
+      "C": 100.0,
+      "D": 60.0
+    }
+  },
+  "HUL-like (synthetic)": {
+    "year": "FY25",
+    "ccirs": 92.0,
+    "band": "Green",
+    "verdict": "Approve",
+    "pillars": {
+      "A": 100.0,
+      "B": 100.0,
+      "C": 100.0,
+      "D": 60.0
+    }
+  },
+  "Apex demo": {
+    "year": "FY26",
+    "ccirs": 46.183,
+    "band": "Orange",
+    "verdict": "Escalate for forensic review",
+    "pillars": {
+      "A": 33.2353,
+      "B": null,
+      "C": 72.0,
+      "D": 33.3333
+    }
+  }
+}

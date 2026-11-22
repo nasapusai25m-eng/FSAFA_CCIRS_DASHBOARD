@@ -1,0 +1,11 @@
+streamlit>=1.48
+pandas>=2.1
+numpy>=1.26
+yfinance>=0.2.54
+plotly>=5.20
+openpyxl>=3.1
+anthropic>=0.40
+pytest>=8.0
+streamlit-searchbox>=0.1.24
+python-docx>=1.1
+pycel>=1.0b30          # tests only: evaluates the hand-check workbook formulas
