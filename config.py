@@ -533,7 +533,7 @@ ONE_OFF_REVENUE_STABLE = 0.15     # ... while revenue moves less than 15% -> dat
 ONE_OFF_TEXT = "Possible one-off or mislabelled item - verify against the annual report."
 
 # AI memo tab (research prototype). False hides the tab; the code, tests and logs stay.
-ENABLE_AI_MEMO = True
+ENABLE_AI_MEMO = False
 AI_MEMO_BANNER = ("Research prototype - in a bank this would run only through an approved model under a data "
                   "agreement; do not paste client data into public AI tools.")
 SIGN_WORDS = ["negative", "outflow", "outflows", "loss", "losses", "deficit", "decline", "declined", "minus",
@@ -602,3 +602,29 @@ ALTMAN_LABEL = {"altman_z1": "Altman Z' (manufacturing)", "altman_z2": "Altman Z
 WEAK_SUB_SCORE = 60              # display: a component below this sub-score is "weak" ("Holds it back")
 ADVERSE_VERDICTS = ("Escalate for forensic review", "Decline")
 RED_FLAGS_NOTE = "Red flags do not change the band; they are addressed through the covenants and checks below."
+
+# =========================================================== company profile fallbacks (display / classification inputs)
+# Yahoo sometimes returns the statements but not the company profile (common on Streamlit Community Cloud).
+# Order used for name, sector and industry: Yahoo profile -> the search result the user picked -> this table ->
+# "Unknown". Values follow Yahoo's own sector / industry labels. Keyed by NSE/BSE symbol without the suffix.
+KNOWN_PROFILES = {
+    "MARUTI": ("Maruti Suzuki India Limited", "Consumer Cyclical", "Auto Manufacturers"),
+    "BHARTIARTL": ("Bharti Airtel Limited", "Communication Services", "Telecom Services"),
+    "IDEA": ("Vodafone Idea Limited", "Communication Services", "Telecom Services"),
+    "ASHOKLEY": ("Ashok Leyland Limited", "Industrials", "Farm & Heavy Construction Machinery"),
+    "KEC": ("KEC International Limited", "Industrials", "Engineering & Construction"),
+    "HCC": ("Hindustan Construction Company Limited", "Industrials", "Engineering & Construction"),
+    "NTPC": ("NTPC Limited", "Utilities", "Utilities - Independent Power Producers"),
+    "RPOWER": ("Reliance Power Limited", "Utilities", "Utilities - Independent Power Producers"),
+    "HINDUNILVR": ("Hindustan Unilever Limited", "Consumer Defensive", "Household & Personal Products"),
+}
+PROFILE_RETRIES = 1              # retry the Yahoo profile call once ...
+PROFILE_RETRY_DELAY = 2.0        # ... after this many seconds, before falling back
+PROFILE_CACHE_SECONDS = 24 * 3600   # a successful profile is reused for 24 hours
+PROFILE_SOURCE_LABELS = {"yahoo": "Yahoo profile", "search": "company search result", "table": "built-in table",
+                         "unknown": "not available"}
+INDUSTRY_TYPES = ("Not set", "Manufacturing", "Non-manufacturing / services", "Bank / NBFC / insurer")
+INDUSTRY_TYPE_ALTMAN = {"Manufacturing": "altman_z1", "Non-manufacturing / services": "altman_z2",
+                        "Bank / NBFC / insurer": "altman_z2"}
+SECTOR_MISSING_WARNING = ("Sector not available from Yahoo - Altman variant and financial-company check may be "
+                          "wrong; choose the sector")

@@ -16,6 +16,7 @@ from __future__ import annotations
 import io
 import math
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Iterable
@@ -336,7 +337,9 @@ def filter_search_quotes(quotes: list[dict]) -> list[dict]:
         if q.get("quoteType") not in (None, "", "EQUITY"):
             continue
         name = q.get("longname") or q.get("shortname") or sym
-        rows.append({"name": name, "ticker": sym, "exchange": "NSE" if sym.endswith(".NS") else "BSE"})
+        rows.append({"name": name, "ticker": sym, "exchange": "NSE" if sym.endswith(".NS") else "BSE",
+                     "sector": q.get("sector") or q.get("sectorDisp") or "",
+                     "industry": q.get("industry") or q.get("industryDisp") or ""})
     best: dict[str, dict] = {}
     order: list[str] = []
     for r in rows:
@@ -600,11 +603,123 @@ def build_from_yahoo_frames(inc: pd.DataFrame | None, bs: pd.DataFrame | None, c
         "latest_fy": vals.columns[-1] if len(vals.columns) else None,
     }
     is_fin, reason = is_financial_company(info)
+    lender = looks_like_lender(inc, bs)
     if not is_fin:
-        is_fin, reason = looks_like_lender(inc, bs)
-    meta.update(is_financial=is_fin, financial_reason=reason)
+        is_fin, reason = lender
+    meta.update(is_financial=is_fin, financial_reason=reason, lender_by_statements=lender,
+                yahoo_profile={k: info.get(src) for k, src in (("name", "longName"), ("sector", "sector"),
+                                                                ("industry", "industry")) if info.get(src)})
+    if not info.get("longName") and info.get("shortName"):
+        meta["yahoo_profile"]["name"] = info["shortName"]
+    meta["profile_source"] = {k: "yahoo" for k in meta["yahoo_profile"]}
     fd = FinancialData(vals, srcs, meta, notes)
     return fd
+
+
+# --------------------------------------------------------------------------- company profile
+_PROFILE_CACHE: dict[str, tuple[float, dict]] = {}
+
+
+def _profile_ok(info: dict) -> bool:
+    return bool(info) and bool(info.get("sector") or info.get("industry"))
+
+
+def get_profile(ticker: str, retries: int | None = None, delay: float | None = None, ticker_factory=None,
+                sleep=time.sleep, now=time.time) -> dict:
+    """Yahoo company profile (tk.info). Retries once after a short delay; a successful profile is cached for
+    config.PROFILE_CACHE_SECONDS. Returns {} when the profile is still missing (that result is not cached)."""
+    retries = config.PROFILE_RETRIES if retries is None else retries
+    delay = config.PROFILE_RETRY_DELAY if delay is None else delay
+    hit = _PROFILE_CACHE.get(ticker)
+    if hit and now() - hit[0] < config.PROFILE_CACHE_SECONDS:
+        return dict(hit[1])
+    if ticker_factory is None:
+        import yfinance as yf
+        ticker_factory = yf.Ticker
+    for attempt in range(retries + 1):
+        try:
+            info = dict(ticker_factory(ticker).info or {})
+        except Exception:      # throttling / blocked profile endpoint
+            info = {}
+        if _profile_ok(info):
+            _PROFILE_CACHE[ticker] = (now(), info)
+            return dict(info)
+        if attempt < retries:
+            sleep(delay)
+    return {}
+
+
+def builtin_profile(ticker: str) -> dict:
+    base = str(ticker or "").upper().split(".")[0]
+    row = config.KNOWN_PROFILES.get(base)
+    return {} if row is None else {"name": row[0], "sector": row[1], "industry": row[2]}
+
+
+def apply_profile(fd: FinancialData, profile: dict | None = None, hint: dict | None = None) -> FinancialData:
+    """Fill name, sector and industry: Yahoo profile -> search result picked -> built-in table -> 'Unknown'.
+    Recomputes the financial-company check from the resolved profile (statement-based lender test as before).
+    `profile` is a raw Yahoo info dict (e.g. from a retried get_profile); `hint` is the picked search row."""
+    meta = dict(fd.meta)
+    yp = dict(meta.get("yahoo_profile") or {})
+    if profile:
+        yp.update({k: profile.get(src) for k, src in (("name", "longName"), ("sector", "sector"),
+                                                       ("industry", "industry")) if profile.get(src)})
+        if "name" not in yp and profile.get("shortName"):
+            yp["name"] = profile["shortName"]
+    hint = {k: (hint or {}).get(k) for k in ("name", "sector", "industry") if (hint or {}).get(k)}
+    table = builtin_profile(meta.get("ticker"))
+    resolved, source = {}, {}
+    for k in ("name", "sector", "industry"):
+        for tag, src in (("yahoo", yp), ("search", hint), ("table", table)):
+            if src.get(k):
+                resolved[k], source[k] = src[k], tag
+                break
+        else:
+            resolved[k] = meta.get("ticker") if k == "name" else "Unknown"
+            source[k] = "unknown"
+    if profile:
+        for k in ("marketCap", "currentPrice"):
+            if profile.get(k) and not meta.get({"marketCap": "market_cap_cr", "currentPrice": "price"}[k]):
+                if k == "marketCap":
+                    meta["market_cap_cr"] = profile[k] / config.CRORE
+                else:
+                    meta["price"] = profile[k]
+    meta.update(resolved, yahoo_profile=yp, profile_source=source)
+    is_fin, reason = is_financial_company({"longName": resolved["name"], "sector": resolved["sector"],
+                                           "industry": resolved["industry"]})
+    if is_fin and source["sector"] != "yahoo" and source["industry"] != "yahoo":
+        reason += f" ({config.PROFILE_SOURCE_LABELS[source['industry']]})"
+    if not is_fin:
+        is_fin, reason = meta.get("lender_by_statements") or (meta.get("is_financial", False),
+                                                             meta.get("financial_reason", ""))
+    meta.update(is_financial=is_fin, financial_reason=reason)
+    notes = [n for n in fd.notes if not n.startswith("Company profile:")]
+    used = sorted({config.PROFILE_SOURCE_LABELS[s] for s in source.values() if s != "yahoo"})
+    if used:
+        notes.insert(0, "Company profile: Yahoo profile unavailable for " + ", ".join(
+            k for k in ("name", "sector", "industry") if source[k] != "yahoo") + "; used " + " / ".join(used) + ".")
+    return FinancialData(fd.values, fd.sources, meta, notes)
+
+
+def apply_industry_type(fd: FinancialData, choice: str | None) -> FinancialData:
+    """Analyst's 'Industry type' when the industry is Unknown: sets the Altman variant and the
+    financial-company check. 'Not set' (or None) leaves the data unchanged."""
+    if not choice or choice == config.INDUSTRY_TYPES[0]:
+        return fd
+    meta = dict(fd.meta)
+    is_fin = choice == "Bank / NBFC / insurer"
+    meta.update(industry_type=choice, altman_override=config.INDUSTRY_TYPE_ALTMAN[choice], is_financial=is_fin,
+                financial_reason="industry type chosen by the analyst" if is_fin else "")
+    return FinancialData(fd.values, fd.sources, meta, fd.notes)
+
+
+def industry_unknown(meta: dict) -> bool:
+    return str(meta.get("industry") or "Unknown") == "Unknown" and not meta.get("is_demo")
+
+
+def industry_display(meta: dict) -> str:
+    ind = str(meta.get("industry") or "Unknown")
+    return f"{ind} (industry type: {meta['industry_type']}, chosen by you)" if meta.get("industry_type") else ind
 
 
 def fetch_yahoo(ticker: str) -> FinancialData:
@@ -614,12 +729,7 @@ def fetch_yahoo(ticker: str) -> FinancialData:
     ticker, note = normalize_ticker(ticker)
     tk = yf.Ticker(ticker)
 
-    info: dict = {}
-    try:
-        info = tk.info or {}
-    except Exception as e:  # yfinance raises many types on throttling / bad tickers
-        info = {}
-        note = (note + " " if note else "") + f"Company profile unavailable from Yahoo ({type(e).__name__})."
+    info: dict = get_profile(ticker, ticker_factory=lambda _t: tk)     # retried once, cached 24 h when found
     try:  # fast_info is more reliable for price / market cap
         fi = tk.fast_info
         info.setdefault("marketCap", getattr(fi, "market_cap", None))
@@ -647,7 +757,7 @@ def fetch_yahoo(ticker: str) -> FinancialData:
     if note:
         fd.notes.insert(0, note)
     fd.meta["fetched_at"] = datetime.now().strftime("%d %b %Y %H:%M")
-    return fd
+    return apply_profile(fd)                                          # search-result / table fallbacks
 
 
 # --------------------------------------------------------------------------- template

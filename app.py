@@ -45,6 +45,16 @@ def cached_yahoo(ticker: str) -> D.FinancialData:
     return D.fetch_yahoo(ticker)
 
 
+def _remember_hints(matches: list[dict]) -> None:
+    """Keep the search rows (name / sector / industry) so a missing Yahoo profile can fall back to them."""
+    try:
+        hints = st.session_state.setdefault("search_hints", {})
+        for m in matches:
+            hints[m["ticker"]] = m
+    except Exception:
+        pass
+
+
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
 def cached_search(query: str) -> list[dict]:
     # st.text_input only reruns on Enter / focus-out, so this is not hit on every keystroke;
@@ -64,6 +74,7 @@ def _live_options(term: str) -> list[tuple[str, str]]:
         matches = cached_search(term.strip().lower())
     except Exception:
         return []
+    _remember_hints(matches)
     return [(f"{m['name']}  ·  {m['exchange']}  ({m['ticker']})", f"{m['ticker']}|{m['name']}") for m in matches]
 
 
@@ -83,6 +94,7 @@ def _enter_search(prefix: str, label: str) -> tuple[str | None, str | None]:
     if not matches:
         st.warning(NO_MATCH_MSG)
         return None, None
+    _remember_hints(matches)
     if len(matches) > 1:
         st.caption(f"{len(matches)} matches - pick the right company.")
     pick = st.selectbox("Select company", range(len(matches)), key=f"{prefix}_pick",
@@ -154,7 +166,7 @@ with st.sidebar:
 # ------------------------------------------------------------------ load
 if load:
     for k in ("fd", "report", "proceed_anyway", "manual", "score_year", "cfo_decision", "neq_decision", "gov_reviewed",
-              "gov_auditor", "gov_opinion", "gov_pledge"):
+              "gov_auditor", "gov_opinion", "gov_pledge", "industry_type"):
         st.session_state.pop(k, None)
     yahoo_fd = upload_fd = None
     errors: list[str] = []
@@ -163,13 +175,14 @@ if load:
         with st.spinner("Fetching statements from Yahoo Finance..."):
             try:
                 yahoo_fd = cached_yahoo(ticker)
-                if not yahoo_fd.meta.get("is_financial") and picked_name:
-                    fin, why = D.is_financial_company({"longName": picked_name})
-                    if fin:
-                        yahoo_fd = D.FinancialData(yahoo_fd.values, yahoo_fd.sources,
-                                                   {**yahoo_fd.meta, "is_financial": True,
-                                                    "financial_reason": why + " (from the search result)"},
-                                                   yahoo_fd.notes)
+                # profile fallbacks: Yahoo profile (retried, cached 24 h) -> picked search row -> built-in table
+                hint = dict(st.session_state.get("search_hints", {}).get(ticker) or {})
+                if picked_name:
+                    hint.setdefault("name", picked_name)
+                prof = None
+                if (yahoo_fd.meta.get("profile_source") or {}).get("industry") != "yahoo":
+                    prof = D.get_profile(ticker)          # the statements may be cached from a profile-less call
+                yahoo_fd = D.apply_profile(yahoo_fd, prof, hint)
             except (D.DataFetchError, ValueError) as e:
                 errors.append(str(e))
             except Exception as e:  # network / throttling
@@ -217,6 +230,13 @@ if fd is None:
     st.stop()
 
 report: D.ValidationReport = st.session_state["report"]
+INDUSTRY_UNKNOWN = D.industry_unknown(fd.meta)
+if INDUSTRY_UNKNOWN:
+    with st.sidebar:
+        st.selectbox("Industry type", config.INDUSTRY_TYPES, key="industry_type",
+                     help="Yahoo did not return this company's sector. Your choice sets the Altman variant "
+                          "(Manufacturing -> Z'; otherwise Z'') and the financial-company check.")
+    fd = D.apply_industry_type(fd, st.session_state.get("industry_type"))
 base_fd = fd
 fd = D.apply_manual(base_fd, st.session_state.get("manual", {}))   # analyst-entered related-party figures
 book: R.RatioBook = R.compute_all(fd, {"include_noncurrent": include_nc})
@@ -247,7 +267,7 @@ st.markdown(
     <div style='flex:1 1 280px'>
       <div style='font-size:1.6rem;font-weight:700'>{html.escape(str(meta.get('name', '-')))}</div>
       <div style='font-size:0.8rem;opacity:0.7'>{html.escape(str(meta.get('ticker', '-')))} ·
-        {html.escape(str(meta.get('sector', '-')))} / {html.escape(str(meta.get('industry', '-')))}</div>
+        {html.escape(str(meta.get('sector', '-')))} / {html.escape(D.industry_display(meta))}</div>
     </div>
     {stat("Latest fiscal year", meta.get("latest_fy") or "-")}
     {stat("Share price", price)}
@@ -530,10 +550,24 @@ def _drivers_table(rows: list[dict], gained: bool) -> pd.DataFrame:
                               round(d["gained"] if gained else -d["lost"], 1)} for d in rows])
 
 
+def sector_warning() -> None:
+    """Industry Unknown after every fallback: warn until the analyst picks an Industry type."""
+    if not INDUSTRY_UNKNOWN:
+        return
+    if meta.get("industry_type"):
+        st.info(f"Industry type chosen by you: **{meta['industry_type']}** -> Altman "
+                f"{R.ALTMAN_SHORT[book.altman_key]}; financial-company check: "
+                f"{'yes' if meta.get('is_financial') else 'no'}. Change it in the sidebar.")
+    else:
+        st.warning(f"⚠️ {config.SECTOR_MISSING_WARNING} in the sidebar (**Industry type**). Currently using "
+                   f"Altman {R.ALTMAN_SHORT[book.altman_key]}.")
+
+
 with tab_dash:
+    sector_warning()
     yr = st.session_state["score_year"]
     # ---------- a) score card
-    meta_line = (f"{html.escape(str(meta.get('sector', '-')))} · {html.escape(str(meta.get('industry', '-')))}"
+    meta_line = (f"{html.escape(str(meta.get('sector', '-')))} · {html.escape(D.industry_display(meta))}"
                  f" · Scoring year {yr} · data loaded {html.escape(str(meta.get('fetched_at', '-')))}")
     if ccirs is not None and ccirs.score is not None:
         fg, bg = ZONE_COLOURS[BAND_COLOUR_KEY[ccirs.band]]
@@ -787,6 +821,7 @@ with tab_ratios:
             st.dataframe(book.piotroski_table(), width="stretch")
 
 with tab_score:
+    sector_warning()
     yr = st.session_state["score_year"]
     st.caption(f"Scoring year: **{yr}**{' (Indicative - limited data)' if year_indicative else ''} - change it in "
                f"the sidebar. Profitability, efficiency and market perception are context only and are not part "

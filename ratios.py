@@ -807,6 +807,10 @@ def beneish(fd, fy, comps: dict | None = None):
 
 # --------------------------------------------------------------------------- distress
 def altman_variant(meta: dict) -> tuple[str, str]:
+    if meta.get("altman_override") in ("altman_z1", "altman_z2"):     # analyst's 'Industry type' (industry Unknown)
+        k = meta["altman_override"]
+        return k, (f"Industry type chosen by the analyst: {meta.get('industry_type')} -> "
+                   + ("Z' (5-factor)." if k == "altman_z1" else "Z'' (non-manufacturing, 4-factor)."))
     industry = str(meta.get("industry") or "").lower()
     sector = str(meta.get("sector") or "").lower()
     for kw in config.MANUFACTURING_INDUSTRY_KEYWORDS:
